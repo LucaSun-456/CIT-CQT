@@ -590,7 +590,14 @@
         try {
             const resp = await fetch('/api/save_session', { method: 'POST' });
             const data = await resp.json();
-            alert(data.success ? 'Session saved: ' + data.filename : 'Save failed');
+            if (data.success) {
+                const pdfMsg = data.pdf_saved
+                    ? ('\nPDF: ' + data.pdf_filename)
+                    : ('\nPDF failed: ' + (data.pdf_error || 'unknown error'));
+                alert('Session saved: ' + data.filename + pdfMsg);
+            } else {
+                alert('Save failed');
+            }
         } catch (err) {
             alert('Save failed: ' + err.message);
         }

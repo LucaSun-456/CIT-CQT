@@ -31,6 +31,83 @@ os.makedirs(SESSION_DIR, exist_ok=True)
 # Keep full waveforms server-side (avoid cookie size limits).
 RUNTIME_WAVEFORMS: dict[str, dict[str, list]] = {}
 
+def _build_pdf_report(session_data: dict, output_path: str | None = None) -> tuple[bytes | None, str]:
+    """
+    Build session PDF report.
+    Returns (pdf_bytes, error_message). When output_path is provided, writes file and
+    returns (b"", "") on success.
+    """
+    questions = session_data.get("questions", [])
+    if not questions:
+        return None, "No questions available for report generation"
+
+    try:
+        import matplotlib.pyplot as plt
+        from matplotlib.backends.backend_pdf import PdfPages
+    except Exception:
+        return None, "matplotlib is required for PDF report export"
+
+    if output_path:
+        target = output_path
+    else:
+        target = BytesIO()
+
+    with PdfPages(target) as pdf:
+        for idx, q in enumerate(questions, start=1):
+            fig = plt.figure(figsize=(11.69, 8.27))  # A4 landscape
+            fig.patch.set_facecolor("#ffffff")
+
+            gs = fig.add_gridspec(2, 1, height_ratios=[1, 2.2], hspace=0.25)
+            ax_meta = fig.add_subplot(gs[0])
+            ax_meta.axis("off")
+            ax_wave = fig.add_subplot(gs[1])
+
+            transcript = (q.get("transcript") or "").strip()
+            analysis = q.get("analysis") or {}
+            gsr_value = analysis.get("gsr_value", "--")
+            cat = analysis.get("category") or analysis.get("question_type") or "irrelevant"
+            confidence = analysis.get("confidence")
+            confidence_txt = f"{int(confidence * 100)}%" if isinstance(confidence, (int, float)) else "--"
+            timestamp = (q.get("timestamp") or "").replace("T", " ")[:19]
+
+            meta_lines = [
+                f"Session: {session_data.get('session_id', '')[:16]}    Team: {session_data.get('team_name', session_data.get('team', ''))}",
+                f"Question #{idx}    Subject: {q.get('candidate_name', q.get('candidate_id', '--'))}    Time: {timestamp}",
+                f"GSR: {gsr_value}    Category: {cat}    Confidence: {confidence_txt}",
+                f"Question: {transcript}",
+            ]
+            ax_meta.text(
+                0.01, 0.95, "\n".join(meta_lines),
+                va="top", ha="left", fontsize=11, family="DejaVu Sans"
+            )
+
+            waveform = q.get("waveform") or []
+            xs = [p.get("t", i) for i, p in enumerate(waveform)] if waveform else []
+            ys = [p.get("v", 0) for p in waveform] if waveform else []
+            if xs and ys:
+                ax_wave.plot(xs, ys, color="#00a7d6", linewidth=2.2)
+                ax_wave.fill_between(xs, ys, 0, color="#00a7d6", alpha=0.12)
+            else:
+                ax_wave.text(
+                    0.5, 0.5, "No waveform data found for this question.",
+                    transform=ax_wave.transAxes, ha="center", va="center", fontsize=12
+                )
+
+            ax_wave.set_ylim(0, 100)
+            ax_wave.set_xlabel("Time (s)")
+            ax_wave.set_ylabel("GSR")
+            ax_wave.set_title("Waveform Response", fontsize=12, pad=10)
+            ax_wave.grid(True, linestyle="--", alpha=0.25)
+
+            pdf.savefig(fig, bbox_inches="tight")
+            plt.close(fig)
+
+    if output_path:
+        return b"", ""
+
+    target.seek(0)
+    return target.read(), ""
+
 
 # ─── Routes ───────────────────────────────────────────────────────────────────
 
@@ -243,14 +320,23 @@ def save_session():
 
     filename = f"{team}_{session_id[:8]}_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
     filepath = os.path.join(SESSION_DIR, filename)
+    pdf_filename = f"{os.path.splitext(filename)[0]}_report.pdf"
+    pdf_filepath = os.path.join(SESSION_DIR, pdf_filename)
 
     with open(filepath, "w", encoding="utf-8") as f:
         json.dump(session_data, f, ensure_ascii=False, indent=2)
+
+    _, pdf_error = _build_pdf_report(session_data, output_path=pdf_filepath)
+    pdf_saved = (pdf_error == "")
 
     return jsonify({
         "success": True,
         "filename": filename,
         "filepath": filepath,
+        "pdf_filename": pdf_filename if pdf_saved else "",
+        "pdf_filepath": pdf_filepath if pdf_saved else "",
+        "pdf_saved": pdf_saved,
+        "pdf_error": pdf_error,
     })
 
 
@@ -411,68 +497,11 @@ def admin_download_report(filename):
     except Exception:
         abort(500)
 
-    questions = data.get("questions", [])
-    if not questions:
-        abort(400)
-
-    try:
-        import matplotlib.pyplot as plt
-        from matplotlib.backends.backend_pdf import PdfPages
-    except Exception:
-        return jsonify({"error": "matplotlib is required for PDF report export"}), 500
-
     report_name = os.path.splitext(os.path.basename(filename))[0] + "_report.pdf"
-    pdf_buffer = BytesIO()
-
-    with PdfPages(pdf_buffer) as pdf:
-        for idx, q in enumerate(questions, start=1):
-            fig = plt.figure(figsize=(11.69, 8.27))  # A4 landscape
-            fig.patch.set_facecolor("#ffffff")
-
-            gs = fig.add_gridspec(2, 1, height_ratios=[1, 2.2], hspace=0.25)
-            ax_meta = fig.add_subplot(gs[0])
-            ax_meta.axis("off")
-            ax_wave = fig.add_subplot(gs[1])
-
-            transcript = (q.get("transcript") or "").strip()
-            analysis = q.get("analysis") or {}
-            gsr_value = analysis.get("gsr_value", "--")
-            cat = analysis.get("category") or analysis.get("question_type") or "irrelevant"
-            confidence = analysis.get("confidence")
-            confidence_txt = f"{int(confidence * 100)}%" if isinstance(confidence, (int, float)) else "--"
-            timestamp = (q.get("timestamp") or "").replace("T", " ")[:19]
-
-            meta_lines = [
-                f"Session: {data.get('session_id', '')[:16]}    Team: {data.get('team_name', data.get('team', ''))}",
-                f"Question #{idx}    Subject: {q.get('candidate_name', q.get('candidate_id', '--'))}    Time: {timestamp}",
-                f"GSR: {gsr_value}    Category: {cat}    Confidence: {confidence_txt}",
-                f"Question: {transcript}",
-            ]
-            ax_meta.text(
-                0.01, 0.95, "\n".join(meta_lines),
-                va="top", ha="left", fontsize=11, family="DejaVu Sans"
-            )
-
-            waveform = q.get("waveform") or []
-            xs = [p.get("t", i) for i, p in enumerate(waveform)] if waveform else []
-            ys = [p.get("v", 0) for p in waveform] if waveform else []
-            if xs and ys:
-                ax_wave.plot(xs, ys, color="#00a7d6", linewidth=2.2)
-                ax_wave.fill_between(xs, ys, 0, color="#00a7d6", alpha=0.12)
-            else:
-                ax_wave.text(0.5, 0.5, "No waveform data found for this question.",
-                             transform=ax_wave.transAxes, ha="center", va="center", fontsize=12)
-
-            ax_wave.set_ylim(0, 100)
-            ax_wave.set_xlabel("Time (s)")
-            ax_wave.set_ylabel("GSR")
-            ax_wave.set_title("Waveform Response", fontsize=12, pad=10)
-            ax_wave.grid(True, linestyle="--", alpha=0.25)
-
-            pdf.savefig(fig, bbox_inches="tight")
-            plt.close(fig)
-
-    pdf_buffer.seek(0)
+    pdf_bytes, err = _build_pdf_report(data)
+    if err:
+        return jsonify({"error": err}), 500
+    pdf_buffer = BytesIO(pdf_bytes)
     return send_file(
         pdf_buffer,
         as_attachment=True,

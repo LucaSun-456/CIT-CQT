@@ -129,7 +129,16 @@
     function saveSession() {
         fetch('/api/save_session', { method: 'POST' })
             .then(r => r.json())
-            .then(d => alert(d.success ? 'Session saved: ' + d.filename : 'Save failed'))
+            .then(d => {
+                if (!d.success) {
+                    alert('Save failed');
+                    return;
+                }
+                const pdfMsg = d.pdf_saved
+                    ? ('\nPDF: ' + d.pdf_filename)
+                    : ('\nPDF failed: ' + (d.pdf_error || 'unknown error'));
+                alert('Session saved: ' + d.filename + pdfMsg);
+            })
             .catch(e => alert('Save failed: ' + e.message));
     }
 
