@@ -132,7 +132,7 @@ def analyze_text():
     # Step 2: Generate GSR waveform
     waveform = generate_gsr_waveform(analysis)
 
-    # Step 3: Save question record
+    # Step 3: Save question record (strip waveform from session to avoid 4KB cookie limit)
     question_record = {
         "id": str(uuid.uuid4()),
         "team": team,
@@ -141,11 +141,19 @@ def analyze_text():
         "timestamp": datetime.datetime.now().isoformat(),
         "transcript": transcript,
         "analysis": analysis,
-        "waveform": waveform,
+        "waveform": waveform,  # full waveform only for this response
+    }
+
+    # Store lightweight version in session (no waveform)
+    session_record = {k: v for k, v in question_record.items() if k != "waveform"}
+    session_record["waveform_summary"] = {
+        "gsr_value": analysis.get("gsr_value", 50),
+        "peak_time": len(waveform) // 2 if waveform else 0,
+        "duration": len(waveform),
     }
 
     questions = session.get("questions", [])
-    questions.append(question_record)
+    questions.append(session_record)
     session["questions"] = questions
 
     return jsonify({
