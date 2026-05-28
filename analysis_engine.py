@@ -211,7 +211,9 @@ def generate_gsr_waveform(analysis: dict, duration_seconds: int = 15) -> list:
     noise_amp = GSR_CONFIG["noise_amplitude"]
 
     waveform = []
-    response_start = int(sample_rate * 0.3)  # response starts after 30% of duration
+    response_start = int(sample_rate * 0.22)  # earlier response onset
+    rise_len = int(sample_rate * 1.0)         # steeper rise (~1s)
+    recover_len = int(sample_rate * 2.8)      # smoother recovery
 
     for i in range(total_points):
         progress = i / total_points
@@ -222,20 +224,28 @@ def generate_gsr_waveform(analysis: dict, duration_seconds: int = 15) -> list:
         elif i < response_start:
             # Pre-response baseline with slight anticipation
             val = baseline + random.gauss(0, noise_amp) + random.uniform(0, 3)
-        elif i < response_start + int(sample_rate * 2):
-            # Rise phase (rapid increase over ~2 seconds)
-            rise_progress = (i - response_start) / (sample_rate * 2)
-            val = baseline + (gsr_value - baseline) * rise_progress + random.gauss(0, noise_amp * 0.8)
-        elif i < response_start + int(sample_rate * 5):
-            # Recovery phase (slow decrease over ~3 seconds)
-            rec_progress = (i - response_start - int(sample_rate * 2)) / (sample_rate * 3)
-            val = baseline + (gsr_value - baseline) * (1 - rec_progress * 0.7) + random.gauss(0, noise_amp * 0.6)
+        elif i < response_start + rise_len:
+            # Rise phase (steeper increase over ~1 second)
+            rise_progress = (i - response_start) / rise_len
+            val = baseline + (gsr_value - baseline) * rise_progress + random.gauss(0, noise_amp * 0.45)
+        elif i < response_start + rise_len + recover_len:
+            # Recovery phase with lower jitter
+            rec_progress = (i - response_start - rise_len) / recover_len
+            val = baseline + (gsr_value - baseline) * (1 - rec_progress * 0.75) + random.gauss(0, noise_amp * 0.35)
         else:
             # Post-response baseline with slight lingering elevation
-            lingering = (gsr_value - baseline) * 0.15 * (1 - (i - response_start - int(sample_rate * 5)) / (sample_rate * 7))
-            val = baseline + max(0, lingering) + random.gauss(0, noise_amp)
+            lingering = (gsr_value - baseline) * 0.10 * (1 - (i - response_start - rise_len - recover_len) / (sample_rate * 8))
+            val = baseline + max(0, lingering) + random.gauss(0, noise_amp * 0.35)
 
         val = max(0, min(100, val))
         waveform.append({"t": round(progress * duration_seconds, 2), "v": round(val, 2)})
 
-    return waveform
+    # Light moving-average smoothing for cleaner, more readable traces.
+    smoothed = []
+    for i in range(len(waveform)):
+        lo = max(0, i - 1)
+        hi = min(len(waveform), i + 2)
+        avg = sum(p["v"] for p in waveform[lo:hi]) / (hi - lo)
+        smoothed.append({"t": waveform[i]["t"], "v": round(avg, 2)})
+
+    return smoothed

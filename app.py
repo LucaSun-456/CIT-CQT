@@ -8,6 +8,7 @@ import os
 import json
 import uuid
 import datetime
+from io import BytesIO
 from flask import (
     Flask, render_template, request, jsonify, session, url_for, redirect, abort, send_file
 )
@@ -27,6 +28,8 @@ app.secret_key = SECRET_KEY
 
 SESSION_DIR = os.path.join(os.path.dirname(__file__), "data", "sessions")
 os.makedirs(SESSION_DIR, exist_ok=True)
+# Keep full waveforms server-side (avoid cookie size limits).
+RUNTIME_WAVEFORMS: dict[str, dict[str, list]] = {}
 
 
 # ─── Routes ───────────────────────────────────────────────────────────────────
@@ -144,7 +147,12 @@ def analyze_text():
         "waveform": waveform,  # full waveform only for this response
     }
 
-    # Store lightweight version in session (no waveform)
+    # Store full waveform server-side and lightweight record in session.
+    session_id = session.get("session_id")
+    if session_id:
+        RUNTIME_WAVEFORMS.setdefault(session_id, {})[question_record["id"]] = waveform
+
+    # Store lightweight version in session (no waveform to avoid cookie overflow)
     session_record = {k: v for k, v in question_record.items() if k != "waveform"}
     session_record["waveform_summary"] = {
         "gsr_value": analysis.get("gsr_value", 50),
@@ -194,7 +202,6 @@ def get_questions():
         return jsonify({"error": "未登录"}), 401
 
     questions = session.get("questions", [])
-    # Return without full waveform data for list view
     summary = []
     for q in questions:
         summary.append({
@@ -203,7 +210,7 @@ def get_questions():
             "timestamp": q["timestamp"],
             "transcript": q["transcript"],
             "analysis": {k: v for k, v in q["analysis"].items() if k != "reasoning"},
-            "waveform": q["waveform"][:10] + ["..."] + q["waveform"][-5:] if len(q["waveform"]) > 15 else q["waveform"],
+            "waveform_summary": q.get("waveform_summary", {}),
         })
     return jsonify(summary)
 
@@ -218,13 +225,20 @@ def save_session():
     session_id = session["session_id"]
     questions = session.get("questions", [])
 
+    session_waveforms = RUNTIME_WAVEFORMS.get(session_id, {})
+    questions_with_waveform = []
+    for q in questions:
+        enriched = dict(q)
+        enriched["waveform"] = session_waveforms.get(q["id"], [])
+        questions_with_waveform.append(enriched)
+
     session_data = {
         "session_id": session_id,
         "team": team,
         "team_name": session["team_name"],
         "variant": ACTIVE_VARIANT,
         "created_at": datetime.datetime.now().isoformat(),
-        "questions": questions,
+        "questions": questions_with_waveform,
     }
 
     filename = f"{team}_{session_id[:8]}_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
@@ -381,6 +395,92 @@ def admin_download_file(filename):
     return send_file(safe_path, as_attachment=True, download_name=filename)
 
 
+@app.route("/admin/download_report/<filename>")
+def admin_download_report(filename):
+    """Download a polished PDF report with question-waveform mapping."""
+    if not session.get("admin"):
+        return redirect(url_for("admin_login"))
+
+    safe_path = os.path.normpath(os.path.join(SESSION_DIR, os.path.basename(filename)))
+    if not safe_path.startswith(os.path.normpath(SESSION_DIR)) or not os.path.exists(safe_path):
+        abort(404)
+
+    try:
+        with open(safe_path, "r", encoding="utf-8") as fh:
+            data = json.load(fh)
+    except Exception:
+        abort(500)
+
+    questions = data.get("questions", [])
+    if not questions:
+        abort(400)
+
+    try:
+        import matplotlib.pyplot as plt
+        from matplotlib.backends.backend_pdf import PdfPages
+    except Exception:
+        return jsonify({"error": "matplotlib is required for PDF report export"}), 500
+
+    report_name = os.path.splitext(os.path.basename(filename))[0] + "_report.pdf"
+    pdf_buffer = BytesIO()
+
+    with PdfPages(pdf_buffer) as pdf:
+        for idx, q in enumerate(questions, start=1):
+            fig = plt.figure(figsize=(11.69, 8.27))  # A4 landscape
+            fig.patch.set_facecolor("#ffffff")
+
+            gs = fig.add_gridspec(2, 1, height_ratios=[1, 2.2], hspace=0.25)
+            ax_meta = fig.add_subplot(gs[0])
+            ax_meta.axis("off")
+            ax_wave = fig.add_subplot(gs[1])
+
+            transcript = (q.get("transcript") or "").strip()
+            analysis = q.get("analysis") or {}
+            gsr_value = analysis.get("gsr_value", "--")
+            cat = analysis.get("category") or analysis.get("question_type") or "irrelevant"
+            confidence = analysis.get("confidence")
+            confidence_txt = f"{int(confidence * 100)}%" if isinstance(confidence, (int, float)) else "--"
+            timestamp = (q.get("timestamp") or "").replace("T", " ")[:19]
+
+            meta_lines = [
+                f"Session: {data.get('session_id', '')[:16]}    Team: {data.get('team_name', data.get('team', ''))}",
+                f"Question #{idx}    Subject: {q.get('candidate_name', q.get('candidate_id', '--'))}    Time: {timestamp}",
+                f"GSR: {gsr_value}    Category: {cat}    Confidence: {confidence_txt}",
+                f"Question: {transcript}",
+            ]
+            ax_meta.text(
+                0.01, 0.95, "\n".join(meta_lines),
+                va="top", ha="left", fontsize=11, family="DejaVu Sans"
+            )
+
+            waveform = q.get("waveform") or []
+            xs = [p.get("t", i) for i, p in enumerate(waveform)] if waveform else []
+            ys = [p.get("v", 0) for p in waveform] if waveform else []
+            if xs and ys:
+                ax_wave.plot(xs, ys, color="#00a7d6", linewidth=2.2)
+                ax_wave.fill_between(xs, ys, 0, color="#00a7d6", alpha=0.12)
+            else:
+                ax_wave.text(0.5, 0.5, "No waveform data found for this question.",
+                             transform=ax_wave.transAxes, ha="center", va="center", fontsize=12)
+
+            ax_wave.set_ylim(0, 100)
+            ax_wave.set_xlabel("Time (s)")
+            ax_wave.set_ylabel("GSR")
+            ax_wave.set_title("Waveform Response", fontsize=12, pad=10)
+            ax_wave.grid(True, linestyle="--", alpha=0.25)
+
+            pdf.savefig(fig, bbox_inches="tight")
+            plt.close(fig)
+
+    pdf_buffer.seek(0)
+    return send_file(
+        pdf_buffer,
+        as_attachment=True,
+        download_name=report_name,
+        mimetype="application/pdf",
+    )
+
+
 @app.route("/admin/download_all")
 def admin_download_all():
     """Download all session data as a single JSON bundle."""
@@ -405,7 +505,6 @@ def admin_download_all():
         "sessions": all_sessions,
     }
 
-    from io import BytesIO
     buffer = BytesIO()
     buffer.write(json.dumps(bundle, ensure_ascii=False, indent=2).encode("utf-8"))
     buffer.seek(0)

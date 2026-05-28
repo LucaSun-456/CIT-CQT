@@ -56,14 +56,10 @@ CANDIDATES = {
     "prosecution": [
         {"id": "suspect_a", "name": "Suspect A", "type": "suspect"},
         {"id": "suspect_b", "name": "Suspect B", "type": "suspect"},
-        {"id": "child_witness", "name": "Child Witness", "type": "witness"},
-        {"id": "adult_witness", "name": "Adult Witness", "type": "witness"},
     ],
     "defence": [
         {"id": "suspect_a", "name": "Suspect A", "type": "suspect"},
         {"id": "suspect_b", "name": "Suspect B", "type": "suspect"},
-        {"id": "child_witness", "name": "Child Witness", "type": "witness"},
-        {"id": "adult_witness", "name": "Adult Witness", "type": "witness"},
     ],
 }
 

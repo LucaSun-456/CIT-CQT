@@ -112,10 +112,7 @@
                 <div class="detail-body">
                     <p><strong>Question:</strong> {{ q.transcript }}</p>
                     <p><strong>Analysis:</strong> {{ q.analysis.reasoning or '--' }}</p>
-                    <details>
-                        <summary>View waveform data ({{ q.waveform|length }} points)</summary>
-                        <div class="mini-waveform" data-waveform='{{ q.waveform|tojson|safe }}'></div>
-                    </details>
+                    <p><strong>Waveform:</strong> {{ q.waveform_summary.duration if q.waveform_summary else '--' }} points captured (full trace in saved JSON/PDF report).</p>
                 </div>
             </div>
             {% endfor %}

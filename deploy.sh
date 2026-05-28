@@ -35,10 +35,17 @@ cd /home/CIQ-CQT/CIT-CQT
 
 if [ ! -f .env ]; then
     echo "  Creating .env file..."
-    sudo -u CIQ-CQT tee .env > /dev/null << 'EOF'
-ELEVENLABS_API_KEY=sk_8271e0693fe305d592cc113fb578edb8589b224f1897651a
-DEEPSEEK_API_KEY=sk-4707d6b74b564bcea23dbe86199c04cb
+    read -rsp "  Enter ELEVENLABS_API_KEY: " ELEVENLABS_API_KEY
+    echo ""
+    read -rsp "  Enter DEEPSEEK_API_KEY: " DEEPSEEK_API_KEY
+    echo ""
+
+    sudo -u CIQ-CQT tee .env > /dev/null << EOF
+ELEVENLABS_API_KEY=${ELEVENLABS_API_KEY}
+DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY}
 EOF
+    unset ELEVENLABS_API_KEY
+    unset DEEPSEEK_API_KEY
 fi
 
 echo ""

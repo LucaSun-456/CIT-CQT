@@ -75,7 +75,7 @@
 
         <!-- Quick Instructions -->
         <div class="quick-guide">
-            <p>💡 <strong>How it works:</strong> Click <strong>Start Speaking</strong> and ask your question. When voice is detected, the waveform shows a subtle reaction — the AI suspect has heard you. Click <strong>Stop Speaking</strong> and DeepSeek automatically analyzes the response. All data is saved and can be downloaded by the administrator.</p>
+            <p>💡 <strong>How it works:</strong> Click <strong>Start Speaking</strong> and ask one question. After you click <strong>Stop Speaking</strong>, wait until the waveform reaction roughly finishes before asking the next question. This keeps each question-response pair clear and easier to interpret. All data can be saved and downloaded by the administrator.</p>
         </div>
 
         <!-- Question History (minimal — no analysis details) -->
@@ -262,10 +262,26 @@
 
     /** Queue GSR values — one point per tick for smooth rise/recovery */
     function startGSRPlayback(points) {
-        const values = (points || [])
+        const rawValues = (points || [])
             .map(p => (typeof p === 'number' ? p : p.v))
             .filter(v => typeof v === 'number' && !Number.isNaN(v));
-        if (!values.length) return;
+
+        // Reduce jitter from model-generated points: take every 2nd sample.
+        const decimated = [];
+        for (let i = 0; i < rawValues.length; i += 2) {
+            decimated.push(rawValues[i]);
+        }
+        if (!decimated.length) return;
+
+        // Exponential smoothing to keep curve readable and less noisy.
+        const values = [];
+        let smoothed = decimated[0];
+        const alpha = 0.55; // higher -> steeper and more responsive
+        for (let i = 0; i < decimated.length; i++) {
+            smoothed = alpha * decimated[i] + (1 - alpha) * smoothed;
+            values.push(smoothed);
+        }
+
         gsrPlayback = { values, index: 0 };
     }
 
@@ -276,12 +292,12 @@
         for (let i = 0; i < len; i++) {
             const p = i / len;
             let val;
-            if (p < 0.2) {
-                val = start + (gsrVal - start) * (p / 0.2);
-            } else if (p < 0.5) {
-                val = gsrVal + (Math.random() - 0.5) * 5;
+            if (p < 0.12) {
+                val = start + (gsrVal - start) * (p / 0.12);
+            } else if (p < 0.42) {
+                val = gsrVal + (Math.random() - 0.5) * 3.2;
             } else {
-                val = gsrVal * (1 - (p - 0.5) / 0.5 * 0.6) + (Math.random() - 0.5) * 3;
+                val = gsrVal * (1 - (p - 0.42) / 0.58 * 0.68) + (Math.random() - 0.5) * 2.2;
             }
             values.push(Math.max(0, Math.min(100, val)));
         }

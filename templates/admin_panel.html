@@ -56,7 +56,7 @@
     <div class="admin-container">
         <div class="admin-header">
             <h1>Saved Session Files</h1>
-            <p>Download individual session data or export all sessions as a single JSON bundle.</p>
+            <p>Download raw session JSON or a polished PDF report with clear question-waveform mapping.</p>
         </div>
 
         <div class="admin-stats">
@@ -81,7 +81,7 @@
                     <th>Filename</th>
                     <th>Size</th>
                     <th>Last Modified</th>
-                    <th>Download</th>
+                    <th>Downloads</th>
                 </tr>
             </thead>
             <tbody>
@@ -90,7 +90,10 @@
                     <td><code>{{ f.filename }}</code></td>
                     <td class="file-size">{{ (f.size / 1024)|round(1) }} KB</td>
                     <td class="file-time">{{ f.modified[:19] }}</td>
-                    <td><a href="/admin/download/{{ f.filename }}" class="btn btn-sm btn-primary">⬇ Download</a></td>
+                    <td>
+                        <a href="/admin/download/{{ f.filename }}" class="btn btn-sm btn-primary">⬇ JSON</a>
+                        <a href="/admin/download_report/{{ f.filename }}" class="btn btn-sm">📄 PDF</a>
+                    </td>
                 </tr>
                 {% endfor %}
             </tbody>
