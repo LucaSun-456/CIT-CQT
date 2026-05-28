@@ -31,8 +31,8 @@ echo [5/5] Committing...
 git commit -m "Initial commit - CIT/CQT mock interrogation system"
 
 :: Push
-echo [5/5] Pushing to GitHub (main branch)...
-git push -u origin main
+echo [5/5] Pushing to GitHub (master branch)...
+git push -u origin master
 
 if %errorlevel% equ 0 (
     echo.
