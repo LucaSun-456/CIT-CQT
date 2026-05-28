@@ -1,0 +1,612 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Interrogation - {{ candidate.name }} | {{ system_type }}</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body>
+    <nav class="top-nav">
+        <div class="nav-brand">
+            <span class="nav-title">Legal Psychology · Interrogation Simulation</span>
+            <span class="nav-badge">{{ system_type }}</span>
+        </div>
+        <div class="nav-info">
+            <span class="nav-team">{{ team_name }}</span>
+            <a href="/dashboard" class="btn btn-sm">Back</a>
+            <a href="/logout" class="btn btn-sm">Logout</a>
+        </div>
+    </nav>
+
+    <main class="main-content">
+        <!-- Candidate Info Bar -->
+        <div class="candidate-bar">
+            <div class="candidate-bar-info">
+                <span class="candidate-bar-icon">{{ "🎭" if candidate.type == "suspect" else "👤" }}</span>
+                <h2>{{ candidate.name }}</h2>
+                <span class="candidate-type-badge">{{ "Suspect" if candidate.type == "suspect" else "Witness" }}</span>
+            </div>
+            <div class="candidate-bar-stats">
+                <div class="stat">
+                    <span class="stat-label">Questions Asked</span>
+                    <span class="stat-value" id="questionCount">0</span>
+                </div>
+            </div>
+        </div>
+
+        <!-- GSR Waveform (Primary Display) -->
+        <div class="gsr-panel">
+            <div class="gsr-header">
+                <h3>GSR Waveform — AI Suspect's Physiological Response</h3>
+            </div>
+            <div class="gsr-canvas-wrapper">
+                <canvas id="gsrCanvas" width="1100" height="300"></canvas>
+                <div class="gsr-scale">
+                    <span>100</span>
+                    <span>75</span>
+                    <span>50</span>
+                    <span>25</span>
+                    <span>0</span>
+                </div>
+            </div>
+            <div class="gsr-controls">
+                <div class="recording-status" id="recordingStatus">
+                    <span class="status-dot idle"></span>
+                    <span id="statusText">Ready</span>
+                </div>
+                <div class="recording-time" id="recordingTime">00:00</div>
+            </div>
+        </div>
+
+        <!-- Controls -->
+        <div class="controls-panel">
+            <button id="recordBtn" class="btn btn-record" onclick="toggleRecording()">
+                <span class="record-icon">●</span>
+                <span id="recordBtnText">Start Speaking</span>
+            </button>
+            <button class="btn btn-secondary" onclick="saveSession()">
+                💾 Save Session
+            </button>
+            <button class="btn btn-secondary" onclick="window.location.href='/results'">
+                📊 View History
+            </button>
+        </div>
+
+        <!-- Quick Instructions -->
+        <div class="quick-guide">
+            <p>💡 <strong>How it works:</strong> Click <strong>Start Speaking</strong> and ask your question. When voice is detected, the waveform shows a subtle reaction — the AI suspect has heard you. Click <strong>Stop Speaking</strong> and DeepSeek automatically analyzes the response. All data is saved and can be downloaded by the administrator.</p>
+        </div>
+
+        <!-- Question History (minimal — no analysis details) -->
+        <div class="history-panel">
+            <h3>Question History</h3>
+            <div id="historyList" class="history-list">
+                <p class="empty-state">No questions yet. Click "Start Speaking" to begin.</p>
+            </div>
+        </div>
+    </main>
+
+    <style>
+    .quick-guide {
+        margin-top: 12px;
+        margin-bottom: 20px;
+        padding: 12px 16px;
+        background: rgba(0,200,255,0.06);
+        border: 1px solid rgba(0,200,255,0.12);
+        border-radius: var(--radius-sm);
+        font-size: 13px;
+        color: var(--text-secondary);
+        line-height: 1.6;
+    }
+    .quick-guide strong { color: var(--text-primary); }
+    </style>
+
+    <script>
+    // ─── State ────────────────────────────────────────────────────────────────
+    const WAVEFORM_HISTORY_SECONDS = 25;
+    const SAMPLE_RATE = 20;
+    let isRecording = false;
+    let mediaRecorder = null;
+    let waveformData = [];
+    let questionHistory = [];
+    let animFrameId = null;
+    let canvasCtx = null;
+    let currentTranscript = '';
+
+    // Voice detection
+    let audioContext = null;
+    let analyserNode = null;
+    let voiceDetected = false;
+    let voiceDetectRaf = null;
+
+    // Server transcription via ElevenLabs (browser STT needs Google — often blocked)
+    let audioChunks = [];
+    let pendingAudioBlob = null;
+    let recorderStopResolve = null;
+
+    // GSR background + gradual response playback
+    let backgroundGSR = 25;
+    let bgTarget = 25;
+    let gsrPlayback = null; // { values: number[], index: number }
+
+    // ─── Canvas ──────────────────────────────────────────────────────────────
+    function initCanvas() {
+        const canvas = document.getElementById('gsrCanvas');
+        canvasCtx = canvas.getContext('2d');
+        resizeCanvas(canvas);
+        window.addEventListener('resize', () => resizeCanvas(canvas));
+    }
+
+    function resizeCanvas(canvas) {
+        const wrapper = canvas.parentElement;
+        const w = wrapper.clientWidth - 50;
+        canvas.width = Math.max(400, w);
+    }
+
+    // ─── Waveform ────────────────────────────────────────────────────────────
+    function renderWaveform() {
+        const canvas = document.getElementById('gsrCanvas');
+        const ctx = canvasCtx;
+        const W = canvas.width;
+        const H = canvas.height;
+        const padTop = 20;
+        const padBottom = 25;
+        const plotH = H - padTop - padBottom;
+
+        ctx.clearRect(0, 0, W, H);
+        ctx.fillStyle = '#0a1628';
+        ctx.fillRect(0, 0, W, H);
+
+        // Grid
+        ctx.strokeStyle = 'rgba(255,255,255,0.06)';
+        ctx.lineWidth = 1;
+        for (let i = 0; i <= 4; i++) {
+            const y = padTop + (plotH / 4) * i;
+            ctx.beginPath();
+            ctx.moveTo(0, y);
+            ctx.lineTo(W, y);
+            ctx.stroke();
+        }
+
+        const maxPoints = Math.floor(W / 3);
+        const dataPoints = waveformData.slice(-maxPoints);
+        const totalPoints = maxPoints;
+
+        if (dataPoints.length < 2) {
+            ctx.strokeStyle = 'rgba(0, 200, 255, 0.3)';
+            ctx.lineWidth = 1;
+            ctx.beginPath();
+            for (let x = 0; x < W; x += 3) {
+                const baseVal = 25 + Math.sin(x * 0.05) * 3 + (Math.random() - 0.5) * 4;
+                const y = padTop + plotH - ((baseVal / 100) * plotH);
+                if (x === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+            }
+            ctx.stroke();
+            renderLabels(ctx, W, H, padTop, plotH);
+            animFrameId = requestAnimationFrame(renderWaveform);
+            return;
+        }
+
+        const stepX = W / totalPoints;
+        const offset = Math.max(0, dataPoints.length - totalPoints);
+
+        // Fill
+        ctx.beginPath();
+        ctx.moveTo(0, padTop + plotH);
+        for (let i = 0; i < dataPoints.length; i++) {
+            const x = (i - offset) * stepX + stepX;
+            if (x < 0) continue;
+            const y = padTop + plotH - ((dataPoints[i].v / 100) * plotH);
+            ctx.lineTo(x, y);
+        }
+        ctx.lineTo(dataPoints.length * stepX, padTop + plotH);
+        ctx.closePath();
+        const grad = ctx.createLinearGradient(0, padTop, 0, padTop + plotH);
+        grad.addColorStop(0, 'rgba(0, 200, 255, 0.15)');
+        grad.addColorStop(1, 'rgba(0, 200, 255, 0.01)');
+        ctx.fillStyle = grad;
+        ctx.fill();
+
+        // Line
+        ctx.strokeStyle = '#00c8ff';
+        ctx.lineWidth = 2;
+        ctx.shadowColor = 'rgba(0, 200, 255, 0.3)';
+        ctx.shadowBlur = 6;
+        ctx.beginPath();
+        for (let i = 0; i < dataPoints.length; i++) {
+            const x = (i - offset) * stepX + stepX;
+            if (x < 0) continue;
+            const y = padTop + plotH - ((dataPoints[i].v / 100) * plotH);
+            if (x === stepX || (i - offset) === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+        }
+        ctx.stroke();
+        ctx.shadowBlur = 0;
+
+        // Voice reaction marker (subtle green dot at detection point)
+        if (voiceDetected) {
+            // Find the detection point in visible range
+            for (let i = 0; i < dataPoints.length; i++) {
+                if (dataPoints[i]._voiceReaction) {
+                    const x = (i - offset) * stepX + stepX;
+                    if (x > 0 && x < W) {
+                        ctx.fillStyle = 'rgba(0, 230, 118, 0.4)';
+                        ctx.beginPath();
+                        ctx.arc(x, padTop + plotH - ((dataPoints[i].v / 100) * plotH), 3, 0, Math.PI * 2);
+                        ctx.fill();
+                    }
+                }
+            }
+        }
+
+        renderLabels(ctx, W, H, padTop, plotH);
+        animFrameId = requestAnimationFrame(renderWaveform);
+    }
+
+    function renderLabels(ctx, W, H, padTop, plotH) {
+        ctx.fillStyle = 'rgba(255,255,255,0.3)';
+        ctx.font = '10px monospace';
+        ctx.textAlign = 'right';
+        for (let i = 0; i <= 4; i++) {
+            ctx.fillText((100 - i * 25).toString(), 35, padTop + (plotH / 4) * i + 3);
+        }
+    }
+
+    // ─── Background GSR ─────────────────────────────────────────────────────
+    function trimWaveformHistory() {
+        const maxPoints = SAMPLE_RATE * WAVEFORM_HISTORY_SECONDS;
+        if (waveformData.length > maxPoints) {
+            waveformData = waveformData.slice(-maxPoints);
+        }
+    }
+
+    /** Queue GSR values — one point per tick for smooth rise/recovery */
+    function startGSRPlayback(points) {
+        const values = (points || [])
+            .map(p => (typeof p === 'number' ? p : p.v))
+            .filter(v => typeof v === 'number' && !Number.isNaN(v));
+        if (!values.length) return;
+        gsrPlayback = { values, index: 0 };
+    }
+
+    function buildGSRResponseCurve(gsrVal, durationSec = 8) {
+        const len = Math.floor(SAMPLE_RATE * durationSec);
+        const start = backgroundGSR;
+        const values = [];
+        for (let i = 0; i < len; i++) {
+            const p = i / len;
+            let val;
+            if (p < 0.2) {
+                val = start + (gsrVal - start) * (p / 0.2);
+            } else if (p < 0.5) {
+                val = gsrVal + (Math.random() - 0.5) * 5;
+            } else {
+                val = gsrVal * (1 - (p - 0.5) / 0.5 * 0.6) + (Math.random() - 0.5) * 3;
+            }
+            values.push(Math.max(0, Math.min(100, val)));
+        }
+        return values;
+    }
+
+    function simulateBackground() {
+        let v;
+
+        if (gsrPlayback && gsrPlayback.index < gsrPlayback.values.length) {
+            v = gsrPlayback.values[gsrPlayback.index++];
+            backgroundGSR = v;
+            if (gsrPlayback.index >= gsrPlayback.values.length) {
+                gsrPlayback = null;
+                bgTarget = 25;
+            }
+        } else {
+            backgroundGSR += (bgTarget - backgroundGSR) * 0.05;
+            backgroundGSR += (Math.random() - 0.5) * 1.5;
+            backgroundGSR = Math.max(10, Math.min(40, backgroundGSR));
+            v = backgroundGSR;
+        }
+
+        waveformData.push({ t: Date.now(), v });
+        trimWaveformHistory();
+    }
+
+    // ─── Voice Detection ────────────────────────────────────────────────────
+    async function setupVoiceDetection(stream) {
+        audioContext = new AudioContext();
+        if (audioContext.state === 'suspended') {
+            await audioContext.resume();
+        }
+        const source = audioContext.createMediaStreamSource(stream);
+        analyserNode = audioContext.createAnalyser();
+        analyserNode.fftSize = 256;
+        source.connect(analyserNode);
+        voiceDetected = false;
+        checkVoiceLevel();
+    }
+
+    function checkVoiceLevel() {
+        if (!analyserNode || !isRecording) return;
+
+        const dataArray = new Uint8Array(analyserNode.frequencyBinCount);
+        analyserNode.getByteFrequencyData(dataArray);
+        const avg = dataArray.reduce((a, b) => a + b, 0) / dataArray.length;
+
+        if (avg > 12 && !voiceDetected) {
+            voiceDetected = true;
+            triggerVoiceReaction();
+        }
+
+        voiceDetectRaf = requestAnimationFrame(checkVoiceLevel);
+    }
+
+    function triggerVoiceReaction() {
+        bgTarget = 32;
+        const duration = SAMPLE_RATE * 3;
+        const peak = 8;
+        const values = [];
+        for (let i = 0; i < duration; i++) {
+            const progress = i / duration;
+            const boost = peak * Math.sin(progress * Math.PI);
+            values.push(Math.max(0, Math.min(100, backgroundGSR + boost + (Math.random() - 0.5) * 2)));
+        }
+        startGSRPlayback(values);
+        setTimeout(() => { bgTarget = 25; }, 4000);
+    }
+
+    // ─── Recording ──────────────────────────────────────────────────────────
+    async function toggleRecording() {
+        if (!isRecording) {
+            await startRecording();
+        } else {
+            stopRecording();
+        }
+    }
+
+    async function startRecording() {
+        transcriptionFinalized = false;
+        try {
+            const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+
+            // Voice detection (for waveform visual)
+            await setupVoiceDetection(stream);
+
+            // MediaRecorder — collect audio for server fallback transcription
+            audioChunks = [];
+            pendingAudioBlob = null;
+            const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
+                ? 'audio/webm;codecs=opus'
+                : (MediaRecorder.isTypeSupported('audio/webm') ? 'audio/webm' : '');
+            mediaRecorder = mimeType
+                ? new MediaRecorder(stream, { mimeType })
+                : new MediaRecorder(stream);
+            mediaRecorder.ondataavailable = (e) => {
+                if (e.data && e.data.size > 0) audioChunks.push(e.data);
+            };
+            const recorderStopped = new Promise(resolve => { recorderStopResolve = resolve; });
+            mediaRecorder.onstop = () => {
+                if (audioChunks.length) {
+                    pendingAudioBlob = new Blob(audioChunks, {
+                        type: mediaRecorder.mimeType || 'audio/webm',
+                    });
+                }
+                if (recorderStopResolve) recorderStopResolve();
+            };
+            mediaRecorder._stoppedPromise = recorderStopped;
+            mediaRecorder.start(250);
+
+            isRecording = true;
+
+            const btn = document.getElementById('recordBtn');
+            btn.classList.add('recording');
+            document.getElementById('recordBtnText').textContent = 'Stop Speaking';
+            document.getElementById('statusText').textContent = 'Recording...';
+            document.getElementById('recordingStatus').querySelector('.status-dot').className = 'status-dot recording';
+            startTimer();
+
+        } catch (err) {
+            alert('Cannot access microphone: ' + err.message);
+        }
+    }
+
+    function stopRecording() {
+        if (!isRecording) return;
+
+        isRecording = false;
+
+        if (mediaRecorder && mediaRecorder.state === 'recording') {
+            mediaRecorder.stop();
+        }
+        if (mediaRecorder && mediaRecorder.stream) {
+            mediaRecorder.stream.getTracks().forEach(t => t.stop());
+        }
+
+        if (audioContext) { audioContext.close(); audioContext = null; analyserNode = null; }
+        if (voiceDetectRaf) { cancelAnimationFrame(voiceDetectRaf); voiceDetectRaf = null; }
+
+        document.getElementById('recordBtn').classList.remove('recording');
+        document.getElementById('recordBtnText').textContent = 'Start Speaking';
+        document.getElementById('statusText').textContent = 'Transcribing...';
+        document.getElementById('recordingStatus').querySelector('.status-dot').className = 'status-dot processing';
+        stopTimer();
+
+        finishTranscriptionAndAnalyze(mediaRecorder);
+    }
+
+    let transcriptionFinalized = false;
+
+    async function finishTranscriptionAndAnalyze(recorder) {
+        if (transcriptionFinalized) return;
+        transcriptionFinalized = true;
+
+        document.getElementById('statusText').textContent = 'Transcribing...';
+
+        if (recorder && recorder._stoppedPromise) {
+            await Promise.race([
+                recorder._stoppedPromise,
+                new Promise(r => setTimeout(r, 3000)),
+            ]);
+        } else {
+            await new Promise(r => setTimeout(r, 300));
+        }
+
+        let transcript = '';
+        if (pendingAudioBlob && pendingAudioBlob.size > 100) {
+            transcript = await transcribeViaServer(pendingAudioBlob);
+        }
+
+        if (!transcript) {
+            transcriptionFinalized = false;
+            document.getElementById('statusText').textContent =
+                'Transcription failed — speak 2+ sec in English, check mic, restart server';
+            document.getElementById('recordingStatus').querySelector('.status-dot').className = 'status-dot idle';
+            return;
+        }
+
+        document.getElementById('statusText').textContent = 'Analyzing...';
+        autoAnalyze(transcript);
+        transcriptionFinalized = false;
+    }
+
+    async function transcribeViaServer(blob) {
+        try {
+            const form = new FormData();
+            form.append('audio', blob, 'recording.webm');
+            const resp = await fetch('/api/transcribe', { method: 'POST', body: form });
+            const data = await resp.json();
+            if (resp.ok && data.transcript) return data.transcript.trim();
+            const msg = data.detail || data.error || 'Unknown error';
+            console.warn('Server transcription failed:', msg);
+            document.getElementById('statusText').textContent = 'Transcribe error: ' + msg.slice(0, 80);
+        } catch (err) {
+            console.warn('Server transcription error:', err);
+        }
+        return '';
+    }
+
+    // ─── Auto Analysis (background, no result panel) ────────────────────────
+    async function autoAnalyze(transcript) {
+        if (!transcript) {
+            document.getElementById('statusText').textContent = 'No speech detected — try again';
+            document.getElementById('recordingStatus').querySelector('.status-dot').className = 'status-dot idle';
+            return;
+        }
+
+        try {
+            const resp = await fetch('/api/analyze', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    transcript: transcript,
+                    candidate_id: '{{ candidate.id }}',
+                }),
+            });
+            const data = await resp.json();
+
+            if (data.error) {
+                document.getElementById('statusText').textContent = 'Analysis failed';
+                document.getElementById('recordingStatus').querySelector('.status-dot').className = 'status-dot idle';
+                return;
+            }
+
+            // Play GSR response gradually (one sample per tick, ~15s from server)
+            const gsrVal = data.analysis.gsr_value || 50;
+            const curve = (data.waveform && data.waveform.length)
+                ? data.waveform
+                : buildGSRResponseCurve(gsrVal);
+            startGSRPlayback(curve);
+
+            // Minimal history entry
+            addHistoryItem(data);
+
+            document.getElementById('questionCount').textContent =
+                parseInt(document.getElementById('questionCount').textContent) + 1;
+
+            document.getElementById('statusText').textContent = '✅ ' + transcript.slice(0, 50) + (transcript.length > 50 ? '...' : '');
+            document.getElementById('recordingStatus').querySelector('.status-dot').className = 'status-dot success';
+
+        } catch (err) {
+            document.getElementById('statusText').textContent = 'Network error';
+            document.getElementById('recordingStatus').querySelector('.status-dot').className = 'status-dot idle';
+        }
+    }
+
+    function addHistoryItem(data) {
+        const list = document.getElementById('historyList');
+        const empty = list.querySelector('.empty-state');
+        if (empty) empty.remove();
+
+        const item = document.createElement('div');
+        item.className = 'history-item';
+        item.innerHTML = `
+            <div class="history-item-header">
+                <span class="history-index">Q${questionHistory.length + 1}</span>
+                <span class="history-transcript">${data.transcript || '(empty transcription)'}</span>
+            </div>
+        `;
+        list.prepend(item);
+        questionHistory.push(data);
+    }
+
+    // ─── Timer ──────────────────────────────────────────────────────────────
+    let timerInterval = null;
+    let seconds = 0;
+
+    function startTimer() {
+        seconds = 0;
+        updateTimerDisplay();
+        timerInterval = setInterval(() => { seconds++; updateTimerDisplay(); }, 1000);
+    }
+
+    function stopTimer() {
+        clearInterval(timerInterval);
+        timerInterval = null;
+    }
+
+    function updateTimerDisplay() {
+        const m = String(Math.floor(seconds / 60)).padStart(2, '0');
+        const s = String(seconds % 60).padStart(2, '0');
+        document.getElementById('recordingTime').textContent = `${m}:${s}`;
+    }
+
+    // ─── Save ───────────────────────────────────────────────────────────────
+    async function saveSession() {
+        const btns = document.querySelectorAll('.controls-panel .btn');
+        btns.forEach(b => b.disabled = true);
+        try {
+            const resp = await fetch('/api/save_session', { method: 'POST' });
+            const data = await resp.json();
+            alert(data.success ? 'Session saved: ' + data.filename : 'Save failed');
+        } catch (err) {
+            alert('Save failed: ' + err.message);
+        }
+        btns.forEach(b => b.disabled = false);
+    }
+
+    // ─── Init ───────────────────────────────────────────────────────────────
+    initCanvas();
+    setInterval(simulateBackground, 1000 / SAMPLE_RATE);
+    renderWaveform();
+
+    fetch('/api/questions').then(r => r.json()).then(data => {
+        if (Array.isArray(data) && data.length > 0) {
+            document.getElementById('questionCount').textContent = data.length;
+            // Rebuild minimal history from existing data
+            const list = document.getElementById('historyList');
+            const empty = list.querySelector('.empty-state');
+            if (empty) empty.remove();
+            data.slice().reverse().forEach((q, i) => {
+                const item = document.createElement('div');
+                item.className = 'history-item';
+                item.innerHTML = `
+                    <div class="history-item-header">
+                        <span class="history-index">Q${data.length - i}</span>
+                        <span class="history-transcript">${q.transcript || '(empty transcription)'}</span>
+                    </div>
+                `;
+                list.prepend(item);
+                questionHistory.push(q);
+            });
+        }
+    });
+    </script>
+</body>
+</html>

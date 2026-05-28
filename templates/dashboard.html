@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Select Interviewee | {{ system_type }}</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body>
+    <nav class="top-nav">
+        <div class="nav-brand">
+            <span class="nav-title">Legal Psychology · Interrogation Simulation</span>
+            <span class="nav-badge">{{ system_type }}</span>
+        </div>
+        <div class="nav-info">
+            <span class="nav-team">{{ team_name }}</span>
+            <span class="nav-variant">Variant: {{ active_variant }}</span>
+            <a href="/logout" class="btn btn-sm">Logout</a>
+        </div>
+    </nav>
+
+    <main class="main-content">
+        <div class="page-header">
+            <h2>Select Interviewee</h2>
+            <p>Choose a role to interrogate. Different roles exhibit different response patterns.</p>
+        </div>
+
+        <div class="candidate-grid">
+            {% for c in candidates %}
+            <a href="/interview/{{ c.id }}" class="candidate-card">
+                <div class="candidate-icon">
+                    {% if c.type == 'suspect' %}
+                    🎭
+                    {% else %}
+                    👤
+                    {% endif %}
+                </div>
+                <div class="candidate-info">
+                    <h3>{{ c.name }}</h3>
+                    <span class="candidate-type">
+                        {{ "Suspect" if c.type == "suspect" else "Witness" }}
+                    </span>
+                </div>
+                <div class="candidate-action">
+                    <span class="arrow">→</span>
+                </div>
+            </a>
+            {% endfor %}
+        </div>
+
+        <div class="system-info">
+            <h3>Instructions</h3>
+            <div class="info-cards">
+                <div class="info-card">
+                    <h4>How to Use</h4>
+                    <ol>
+                        <li>Select an interviewee to enter the interrogation room</li>
+                        <li>Click "Start Speaking" to record your question</li>
+                        <li>Click "Stop Speaking" to submit — analysis runs automatically</li>
+                        <li>The GSR waveform displays the AI suspect's real-time response</li>
+                        <li>View question history at any time</li>
+                    </ol>
+                </div>
+                <div class="info-card">
+                    <h4>Tips</h4>
+                    <ul>
+                        <li>Speak clearly and close to the microphone</li>
+                        <li>Keep each question under 30 seconds</li>
+                        <li>Clear, specific questions yield clearer GSR signals</li>
+                        <li>Save your session when finished</li>
+                    </ul>
+                </div>
+            </div>
+        </div>
+    </main>
+
+    <script>
+    fetch('/api/questions').catch(() => {
+        window.location.href = '/';
+    });
+    </script>
+</body>
+</html>

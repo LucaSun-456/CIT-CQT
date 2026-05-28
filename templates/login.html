@@ -1,0 +1,86 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CIT/CQT System | Legal Psychology</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body class="login-body">
+    <div class="login-container">
+        <div class="login-header">
+            <div class="login-badge">NYU Shanghai</div>
+            <h1>Legal Psychology · Interrogation Simulation</h1>
+            <p class="subtitle">CIT (Concealed Information Test) / CQT (Comparison Question Test)</p>
+        </div>
+
+        <form id="loginForm" class="login-form">
+            <div class="form-group">
+                <label>Select Team</label>
+                <div class="team-select">
+                    {% for key, name in teams.items() %}
+                    <label class="team-option">
+                        <input type="radio" name="team" value="{{ key }}" required>
+                        <div class="team-card">
+                            <div class="team-icon">{{ "🛡️" if key == "prosecution" else "⚖️" }}</div>
+                            <div class="team-name">{{ name }}</div>
+                        </div>
+                    </label>
+                    {% endfor %}
+                </div>
+            </div>
+
+            <div class="form-group">
+                <label for="password">Team Password</label>
+                <input type="password" id="password" name="password" placeholder="Enter team password" required>
+            </div>
+
+            <button type="submit" class="btn btn-primary btn-full">
+                Enter System
+            </button>
+
+            <div id="loginError" class="error-message" style="display:none;"></div>
+        </form>
+
+        <div class="login-footer">
+            <p>Version: <span class="badge">v16 - Fall 2026</span></p>
+            <p>Professor Pekka Santtila · NYU Shanghai</p>
+            <p><a href="/admin" style="color:var(--text-muted);font-size:11px;">Admin</a></p>
+        </div>
+    </div>
+
+    <script>
+    document.getElementById('loginForm').addEventListener('submit', async function(e) {
+        e.preventDefault();
+        const formData = new FormData(this);
+        const errDiv = document.getElementById('loginError');
+        errDiv.style.display = 'none';
+
+        const btn = this.querySelector('button[type="submit"]');
+        btn.disabled = true;
+        btn.textContent = 'Logging in...';
+
+        try {
+            const resp = await fetch('/login', {
+                method: 'POST',
+                body: formData
+            });
+            const data = await resp.json();
+            if (data.success) {
+                window.location.href = '/dashboard';
+            } else {
+                errDiv.textContent = data.error;
+                errDiv.style.display = 'block';
+                btn.disabled = false;
+                btn.textContent = 'Enter System';
+            }
+        } catch (err) {
+            errDiv.textContent = 'Network error, please retry';
+            errDiv.style.display = 'block';
+            btn.disabled = false;
+            btn.textContent = 'Enter System';
+        }
+    });
+    </script>
+</body>
+</html>

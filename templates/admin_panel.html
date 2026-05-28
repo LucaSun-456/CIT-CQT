@@ -1,0 +1,105 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Admin Panel - Session Downloads</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <style>
+    .admin-container { max-width: 900px; margin: 0 auto; padding: 24px; }
+    .admin-header { margin-bottom: 24px; }
+    .admin-header h1 { font-size: 22px; margin-bottom: 4px; }
+    .admin-header p { color: var(--text-secondary); font-size: 14px; }
+    .admin-stats { display: flex; gap: 16px; margin-bottom: 24px; }
+    .admin-stat-card {
+        flex: 1;
+        padding: 16px;
+        background: var(--bg-card);
+        border: 1px solid var(--border-color);
+        border-radius: var(--radius-sm);
+        text-align: center;
+    }
+    .admin-stat-number { font-size: 28px; font-weight: 800; color: var(--accent-blue); font-family: monospace; }
+    .admin-stat-label { font-size: 12px; color: var(--text-secondary); margin-top: 4px; }
+    .admin-actions { display: flex; gap: 12px; margin-bottom: 24px; }
+    .file-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+    .file-table th {
+        padding: 10px 12px;
+        background: var(--bg-secondary);
+        text-align: left;
+        font-weight: 600;
+        color: var(--text-secondary);
+        border-bottom: 2px solid var(--border-color);
+    }
+    .file-table td {
+        padding: 10px 12px;
+        border-bottom: 1px solid var(--border-color);
+        vertical-align: middle;
+    }
+    .file-table tr:hover td { background: rgba(0,200,255,0.03); }
+    .file-size { font-family: monospace; color: var(--text-muted); font-size: 12px; }
+    .file-time { font-family: monospace; color: var(--text-muted); font-size: 12px; }
+    .no-files { text-align: center; padding: 48px; color: var(--text-muted); }
+    </style>
+</head>
+<body>
+    <nav class="top-nav">
+        <div class="nav-brand">
+            <span class="nav-title">Admin Panel — Session Downloads</span>
+        </div>
+        <div class="nav-info">
+            <a href="/admin/panel" class="btn btn-sm">Refresh</a>
+            <a href="/" class="btn btn-sm">Home</a>
+        </div>
+    </nav>
+
+    <div class="admin-container">
+        <div class="admin-header">
+            <h1>Saved Session Files</h1>
+            <p>Download individual session data or export all sessions as a single JSON bundle.</p>
+        </div>
+
+        <div class="admin-stats">
+            <div class="admin-stat-card">
+                <span class="admin-stat-number">{{ files|length }}</span>
+                <span class="admin-stat-label">Session Files</span>
+            </div>
+            <div class="admin-stat-card">
+                <span class="admin-stat-number">{{ files|map(attribute='size')|sum // 1024 }} KB</span>
+                <span class="admin-stat-label">Total Size</span>
+            </div>
+        </div>
+
+        <div class="admin-actions">
+            <a href="/admin/download_all" class="btn btn-primary">📦 Download All Sessions</a>
+        </div>
+
+        {% if files %}
+        <table class="file-table">
+            <thead>
+                <tr>
+                    <th>Filename</th>
+                    <th>Size</th>
+                    <th>Last Modified</th>
+                    <th>Download</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for f in files %}
+                <tr>
+                    <td><code>{{ f.filename }}</code></td>
+                    <td class="file-size">{{ (f.size / 1024)|round(1) }} KB</td>
+                    <td class="file-time">{{ f.modified[:19] }}</td>
+                    <td><a href="/admin/download/{{ f.filename }}" class="btn btn-sm btn-primary">⬇ Download</a></td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        {% else %}
+        <div class="no-files">
+            <p>No session files found. Sessions are saved when users click "Save Session" during an interrogation.</p>
+        </div>
+        {% endif %}
+    </div>
+</body>
+</html>

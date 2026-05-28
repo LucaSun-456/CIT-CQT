@@ -1,0 +1,194 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Question History | {{ system_type }}</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body>
+    <nav class="top-nav">
+        <div class="nav-brand">
+            <span class="nav-title">Legal Psychology · Interrogation Simulation</span>
+            <span class="nav-badge">{{ system_type }}</span>
+        </div>
+        <div class="nav-info">
+            <span class="nav-team">{{ team_name }}</span>
+            <a href="/dashboard" class="btn btn-sm">Back</a>
+            <a href="/logout" class="btn btn-sm">Logout</a>
+        </div>
+    </nav>
+
+    <main class="main-content">
+        <div class="page-header">
+            <h2>Question History &amp; Data Analysis</h2>
+            <p>Session ID: <code>{{ session_id[:16] }}...</code></p>
+            <div class="action-buttons">
+                <button class="btn btn-primary" onclick="exportJSON()">📥 Export JSON</button>
+                <button class="btn btn-primary" onclick="exportCSV()">📥 Export CSV</button>
+                <button class="btn btn-secondary" onclick="saveSession()">💾 Save Session</button>
+                <button class="btn btn-secondary" onclick="window.location.href='/interview/{{ questions[0].candidate_id if questions else 'suspect_a' }}'">Continue</button>
+            </div>
+        </div>
+
+        {% if questions %}
+        <div class="results-summary">
+            <div class="summary-card">
+                <span class="summary-number">{{ questions|length }}</span>
+                <span class="summary-label">Total Questions</span>
+            </div>
+            <div class="summary-card">
+                <span class="summary-number">{{ questions|selectattr('analysis.gsr_value', 'gt', 65)|list|length }}</span>
+                <span class="summary-label">High GSR</span>
+            </div>
+            <div class="summary-card">
+                <span class="summary-number">{{ questions|selectattr('analysis.gsr_value', 'gt', 40)|selectattr('analysis.gsr_value', 'lt', 66)|list|length }}</span>
+                <span class="summary-label">Medium GSR</span>
+            </div>
+            <div class="summary-card">
+                <span class="summary-number">{{ questions|selectattr('analysis.gsr_value', 'lt', 41)|list|length }}</span>
+                <span class="summary-label">Baseline GSR</span>
+            </div>
+        </div>
+
+        <div class="results-table-wrapper">
+            <table class="results-table">
+                <thead>
+                    <tr>
+                        <th>#</th>
+                        <th>Subject</th>
+                        <th>Question</th>
+                        <th>GSR</th>
+                        <th>Category</th>
+                        <th>Confidence</th>
+                        <th>Quality</th>
+                        <th>Time</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for q in questions %}
+                    <tr>
+                        <td>{{ loop.index }}</td>
+                        <td>{{ q.candidate_name }}</td>
+                        <td class="transcript-cell">{{ q.transcript }}</td>
+                        <td>
+                            <span class="gsr-indicator" style="color: {{ '#ff4444' if q.analysis.gsr_value > 65 else '#ffaa00' if q.analysis.gsr_value > 40 else '#00c8ff' }}">
+                                {{ "%.1f"|format(q.analysis.gsr_value) }}
+                            </span>
+                        </td>
+                        <td>
+                            {% set cat = q.analysis.category or q.analysis.question_type or 'irrelevant' %}
+                            <span class="category-badge {{ cat }}">
+                                {% if cat == 'confidential' %}🔴 Confidential
+                                {% elif cat == 'leaked' %}🟡 Leaked
+                                {% elif cat == 'relevant' %}🔴 Relevant
+                                {% elif cat == 'comparison' %}🟠 Comparison
+                                {% else %}⚪ Irrelevant
+                                {% endif %}
+                            </span>
+                        </td>
+                        <td>{{ "%.0f"|format(q.analysis.confidence * 100) if q.analysis.confidence else '--' }}%</td>
+                        <td>
+                            <span class="quality-badge {{ q.analysis.question_quality }}">
+                                {{ {'good':'Good','medium':'Medium','poor':'Poor'}[q.analysis.question_quality] or q.analysis.question_quality }}
+                            </span>
+                        </td>
+                        <td class="time-cell">{{ q.timestamp.split('T')[1][:8] if q.timestamp else '--' }}</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+
+        <!-- Detail Cards -->
+        <div class="detail-cards">
+            {% for q in questions %}
+            <div class="detail-card">
+                <div class="detail-header">
+                    <span class="detail-qnum">Question #{{ loop.index }}</span>
+                    <span class="detail-candidate">{{ q.candidate_name }}</span>
+                    <span class="detail-time">{{ q.timestamp[:19] }}</span>
+                </div>
+                <div class="detail-body">
+                    <p><strong>Question:</strong> {{ q.transcript }}</p>
+                    <p><strong>Analysis:</strong> {{ q.analysis.reasoning or '--' }}</p>
+                    <details>
+                        <summary>View waveform data ({{ q.waveform|length }} points)</summary>
+                        <div class="mini-waveform" data-waveform='{{ q.waveform|tojson|safe }}'></div>
+                    </details>
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+        {% else %}
+        <div class="empty-state-large">
+            <p>No questions recorded yet.</p>
+            <a href="/dashboard" class="btn btn-primary">Start Interview</a>
+        </div>
+        {% endif %}
+    </main>
+
+    <script>
+    function saveSession() {
+        fetch('/api/save_session', { method: 'POST' })
+            .then(r => r.json())
+            .then(d => alert(d.success ? 'Session saved: ' + d.filename : 'Save failed'))
+            .catch(e => alert('Save failed: ' + e.message));
+    }
+
+    function exportJSON() {
+        const questions = {{ questions|tojson|safe }};
+        const exportData = {
+            session_id: '{{ session_id }}',
+            team: '{{ session.get("team", "") }}',
+            export_time: new Date().toISOString(),
+            total_questions: questions.length,
+            questions: questions.map(q => ({
+                candidate: q.candidate_name,
+                transcript: q.transcript,
+                gsr_value: q.analysis.gsr_value,
+                category: q.analysis.category || q.analysis.question_type,
+                confidence: q.analysis.confidence,
+                question_quality: q.analysis.question_quality,
+                reasoning: q.analysis.reasoning,
+                timestamp: q.timestamp,
+                rc_ratio: q.analysis.rc_ratio,
+                deception_detected: q.analysis.deception_detected,
+            })),
+        };
+        const blob = new Blob([JSON.stringify(exportData, null, 2)], { type: 'application/json' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `cit_cqt_export_${new Date().toISOString().slice(0,10)}.json`;
+        a.click();
+        URL.revokeObjectURL(url);
+    }
+
+    function exportCSV() {
+        const questions = {{ questions|tojson|safe }};
+        const headers = ['#','Subject','Question','GSR','Category','Confidence','Quality','Time'];
+        const rows = questions.map((q, i) => [
+            i + 1,
+            q.candidate_name,
+            `"${(q.transcript || '').replace(/"/g, '""')}"`,
+            q.analysis.gsr_value,
+            q.analysis.category || q.analysis.question_type || '',
+            q.analysis.confidence ? (q.analysis.confidence * 100).toFixed(0) + '%' : '',
+            q.analysis.question_quality || '',
+            q.timestamp ? q.timestamp.slice(0,19) : '',
+        ]);
+
+        const csv = [headers.join(','), ...rows.map(r => r.join(','))].join('\n');
+        const bom = '﻿';
+        const blob = new Blob([bom + csv], { type: 'text/csv;charset=utf-8;' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `cit_cqt_export_${new Date().toISOString().slice(0,10)}.csv`;
+        a.click();
+        URL.revokeObjectURL(url);
+    }
+    </script>
+</body>
+</html>
