@@ -199,48 +199,72 @@ def _fallback_analysis(prompt: str) -> dict:
     }
 
 
-def generate_gsr_waveform(analysis: dict, duration_seconds: int = 15) -> list:
+def _smooth_random_walk(length: int, step_scale: float = 1.0, smooth_window: int = 5) -> list[float]:
+    """Generate a smooth low-frequency random envelope (random walk + moving average)."""
+    if length <= 0:
+        return []
+    walk = [0.0]
+    for _ in range(length - 1):
+        walk.append(walk[-1] + random.gauss(0, step_scale))
+    half = max(1, smooth_window // 2)
+    smoothed = []
+    for i in range(length):
+        lo = max(0, i - half)
+        hi = min(length, i + half + 1)
+        smoothed.append(sum(walk[lo:hi]) / (hi - lo))
+    return smoothed
+
+
+def generate_gsr_waveform(analysis: dict, duration_seconds: int | None = None) -> list:
     """
-    Generate a realistic GSR waveform data series based on analysis.
+    Generate a realistic GSR waveform with smooth but varied shape and amplitude.
     Returns list of {timestamp, value} points.
     """
     sample_rate = GSR_CONFIG["sampling_rate_hz"]
+    if duration_seconds is None:
+        duration_seconds = random.randint(13, 17)
     total_points = duration_seconds * sample_rate
-    gsr_value = analysis.get("gsr_value", 30)
-    baseline = GSR_CONFIG["baseline_mean"]
-    noise_amp = GSR_CONFIG["noise_amplitude"]
+
+    base_gsr = analysis.get("gsr_value", 30)
+    # Per-response variation in peak height and baseline level
+    peak_gsr = base_gsr * random.uniform(0.86, 1.14)
+    baseline = GSR_CONFIG["baseline_mean"] + random.uniform(-5, 5)
+    noise_amp = GSR_CONFIG["noise_amplitude"] * random.uniform(0.9, 1.35)
+
+    response_start = int(sample_rate * random.uniform(0.18, 0.28))
+    rise_len = max(8, int(sample_rate * random.uniform(0.8, 1.3)))
+    recover_len = max(12, int(sample_rate * random.uniform(2.4, 3.4)))
+
+    envelope = _smooth_random_walk(total_points, step_scale=0.55, smooth_window=7)
+    env_scale = random.uniform(2.5, 6.5)
 
     waveform = []
-    response_start = int(sample_rate * 0.22)  # earlier response onset
-    rise_len = int(sample_rate * 1.0)         # steeper rise (~1s)
-    recover_len = int(sample_rate * 2.8)      # smoother recovery
-
     for i in range(total_points):
         progress = i / total_points
+        env = envelope[i] * env_scale
 
         if i < int(sample_rate * 0.1):
-            # Initial baseline
-            val = baseline + random.gauss(0, noise_amp)
+            val = baseline + env + random.gauss(0, noise_amp)
         elif i < response_start:
-            # Pre-response baseline with slight anticipation
-            val = baseline + random.gauss(0, noise_amp) + random.uniform(0, 3)
+            val = baseline + env * 0.6 + random.gauss(0, noise_amp) + random.uniform(0, 2.5)
         elif i < response_start + rise_len:
-            # Rise phase (steeper increase over ~1 second)
             rise_progress = (i - response_start) / rise_len
-            val = baseline + (gsr_value - baseline) * rise_progress + random.gauss(0, noise_amp * 0.45)
+            # Slightly non-linear rise for more natural shape
+            rise_curve = rise_progress ** random.uniform(0.85, 1.15)
+            val = baseline + (peak_gsr - baseline) * rise_curve + env * 0.4 + random.gauss(0, noise_amp * 0.5)
         elif i < response_start + rise_len + recover_len:
-            # Recovery phase with lower jitter
             rec_progress = (i - response_start - rise_len) / recover_len
-            val = baseline + (gsr_value - baseline) * (1 - rec_progress * 0.75) + random.gauss(0, noise_amp * 0.35)
+            val = baseline + (peak_gsr - baseline) * (1 - rec_progress * random.uniform(0.65, 0.82))
+            val += env * 0.35 + random.gauss(0, noise_amp * 0.4)
         else:
-            # Post-response baseline with slight lingering elevation
-            lingering = (gsr_value - baseline) * 0.10 * (1 - (i - response_start - rise_len - recover_len) / (sample_rate * 8))
-            val = baseline + max(0, lingering) + random.gauss(0, noise_amp * 0.35)
+            tail = (i - response_start - rise_len - recover_len) / max(1, sample_rate * 8)
+            lingering = (peak_gsr - baseline) * random.uniform(0.08, 0.14) * max(0, 1 - tail)
+            val = baseline + lingering + env * 0.25 + random.gauss(0, noise_amp * 0.35)
 
         val = max(0, min(100, val))
         waveform.append({"t": round(progress * duration_seconds, 2), "v": round(val, 2)})
 
-    # Light moving-average smoothing for cleaner, more readable traces.
+    # Light smoothing — keeps curve readable while preserving variation
     smoothed = []
     for i in range(len(waveform)):
         lo = max(0, i - 1)

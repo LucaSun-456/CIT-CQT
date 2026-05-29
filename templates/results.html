@@ -15,6 +15,7 @@
         <div class="nav-info">
             <span class="nav-team">{{ team_name }}</span>
             <a href="/dashboard" class="btn btn-sm">Back</a>
+            <button type="button" class="btn btn-sm btn-end-session" onclick="endSessionAndDownload()">End &amp; PDF</button>
             <a href="/logout" class="btn btn-sm">Logout</a>
         </div>
     </nav>
@@ -27,6 +28,7 @@
                 <button class="btn btn-primary" onclick="exportJSON()">📥 Export JSON</button>
                 <button class="btn btn-primary" onclick="exportCSV()">📥 Export CSV</button>
                 <button class="btn btn-secondary" onclick="saveSession()">💾 Save Session</button>
+                <button class="btn btn-primary" onclick="endSessionAndDownload()">📄 End &amp; Download PDF</button>
                 <button class="btn btn-secondary" onclick="window.location.href='/interview/{{ questions[0].candidate_id if questions else 'suspect_a' }}'">Continue</button>
             </div>
         </div>
@@ -196,5 +198,6 @@
         URL.revokeObjectURL(url);
     }
     </script>
+    <script src="{{ url_for('static', filename='js/end_session.js') }}"></script>
 </body>
 </html>

@@ -15,6 +15,7 @@
         <div class="nav-info">
             <span class="nav-team">{{ team_name }}</span>
             <a href="/dashboard" class="btn btn-sm">Back</a>
+            <button type="button" class="btn btn-sm btn-end-session" onclick="endSessionAndDownload()">End &amp; PDF</button>
             <a href="/logout" class="btn btn-sm">Logout</a>
         </div>
     </nav>
@@ -128,6 +129,8 @@
     // GSR background + gradual response playback
     let backgroundGSR = 25;
     let bgTarget = 25;
+    let baselineDrift = 0;
+    let slowWobble = Math.random() * Math.PI * 2;
     let gsrPlayback = null; // { values: number[], index: number }
 
     // ─── Canvas ──────────────────────────────────────────────────────────────
@@ -276,10 +279,11 @@
         // Exponential smoothing to keep curve readable and less noisy.
         const values = [];
         let smoothed = decimated[0];
-        const alpha = 0.55; // higher -> steeper and more responsive
+        const alpha = 0.48;
         for (let i = 0; i < decimated.length; i++) {
             smoothed = alpha * decimated[i] + (1 - alpha) * smoothed;
-            values.push(smoothed);
+            const micro = (Math.random() - 0.5) * 1.2;
+            values.push(Math.max(0, Math.min(100, smoothed + micro * 0.35)));
         }
 
         gsrPlayback = { values, index: 0 };
@@ -315,9 +319,13 @@
                 bgTarget = 25;
             }
         } else {
-            backgroundGSR += (bgTarget - backgroundGSR) * 0.05;
-            backgroundGSR += (Math.random() - 0.5) * 1.5;
-            backgroundGSR = Math.max(10, Math.min(40, backgroundGSR));
+            baselineDrift += (Math.random() - 0.5) * 0.35;
+            baselineDrift *= 0.88;
+            slowWobble += 0.04;
+            bgTarget = 25 + baselineDrift + Math.sin(slowWobble) * 2.5 + (Math.random() - 0.5) * 0.8;
+            backgroundGSR += (bgTarget - backgroundGSR) * 0.06;
+            backgroundGSR += (Math.random() - 0.5) * 2.2;
+            backgroundGSR = Math.max(10, Math.min(42, backgroundGSR));
             v = backgroundGSR;
         }
 
@@ -631,5 +639,6 @@
         }
     });
     </script>
+    <script src="{{ url_for('static', filename='js/end_session.js') }}"></script>
 </body>
 </html>

@@ -15,6 +15,7 @@
         <div class="nav-info">
             <span class="nav-team">{{ team_name }}</span>
             <span class="nav-variant">Variant: {{ active_variant }}</span>
+            <button type="button" class="btn btn-sm btn-end-session" onclick="endSessionAndDownload()">End &amp; PDF</button>
             <a href="/logout" class="btn btn-sm">Logout</a>
         </div>
     </nav>
@@ -79,5 +80,6 @@
         window.location.href = '/';
     });
     </script>
+    <script src="{{ url_for('static', filename='js/end_session.js') }}"></script>
 </body>
 </html>

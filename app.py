@@ -31,6 +31,30 @@ os.makedirs(SESSION_DIR, exist_ok=True)
 # Keep full waveforms server-side (avoid cookie size limits).
 RUNTIME_WAVEFORMS: dict[str, dict[str, list]] = {}
 
+
+def _build_session_export_data() -> dict | None:
+    """Assemble current logged-in session with full waveforms for PDF/JSON export."""
+    if "team" not in session:
+        return None
+
+    session_id = session.get("session_id", "")
+    questions = session.get("questions", [])
+    session_waveforms = RUNTIME_WAVEFORMS.get(session_id, {})
+    questions_with_waveform = []
+    for q in questions:
+        enriched = dict(q)
+        enriched["waveform"] = session_waveforms.get(q["id"], [])
+        questions_with_waveform.append(enriched)
+
+    return {
+        "session_id": session_id,
+        "team": session["team"],
+        "team_name": session["team_name"],
+        "variant": ACTIVE_VARIANT,
+        "created_at": datetime.datetime.now().isoformat(),
+        "questions": questions_with_waveform,
+    }
+
 def _build_pdf_report(session_data: dict, output_path: str | None = None) -> tuple[bytes | None, str]:
     """
     Build session PDF report.
@@ -65,15 +89,12 @@ def _build_pdf_report(session_data: dict, output_path: str | None = None) -> tup
             transcript = (q.get("transcript") or "").strip()
             analysis = q.get("analysis") or {}
             gsr_value = analysis.get("gsr_value", "--")
-            cat = analysis.get("category") or analysis.get("question_type") or "irrelevant"
-            confidence = analysis.get("confidence")
-            confidence_txt = f"{int(confidence * 100)}%" if isinstance(confidence, (int, float)) else "--"
             timestamp = (q.get("timestamp") or "").replace("T", " ")[:19]
 
             meta_lines = [
                 f"Session: {session_data.get('session_id', '')[:16]}    Team: {session_data.get('team_name', session_data.get('team', ''))}",
                 f"Question #{idx}    Subject: {q.get('candidate_name', q.get('candidate_id', '--'))}    Time: {timestamp}",
-                f"GSR: {gsr_value}    Category: {cat}    Confidence: {confidence_txt}",
+                f"GSR peak: {gsr_value}",
                 f"Question: {transcript}",
             ]
             ax_meta.text(
@@ -292,6 +313,30 @@ def get_questions():
     return jsonify(summary)
 
 
+@app.route("/api/download_session_pdf")
+def download_session_pdf():
+    """Download PDF report for the current interview session (participant)."""
+    session_data = _build_session_export_data()
+    if not session_data:
+        return jsonify({"error": "Not logged in"}), 401
+
+    if not session_data.get("questions"):
+        return jsonify({"error": "No questions in this session yet"}), 400
+
+    pdf_bytes, err = _build_pdf_report(session_data)
+    if err:
+        return jsonify({"error": err}), 500
+
+    pdf_buffer = BytesIO(pdf_bytes)
+    fname = f"interview_{session_data['team']}_{session_data['session_id'][:8]}_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf"
+    return send_file(
+        pdf_buffer,
+        as_attachment=True,
+        download_name=fname,
+        mimetype="application/pdf",
+    )
+
+
 @app.route("/api/save_session", methods=["POST"])
 def save_session():
     """Save the current session data to disk."""
@@ -300,24 +345,11 @@ def save_session():
 
     team = session["team"]
     session_id = session["session_id"]
-    questions = session.get("questions", [])
+    session_data = _build_session_export_data()
+    if not session_data:
+        return jsonify({"error": "Not logged in"}), 401
 
-    session_waveforms = RUNTIME_WAVEFORMS.get(session_id, {})
-    questions_with_waveform = []
-    for q in questions:
-        enriched = dict(q)
-        enriched["waveform"] = session_waveforms.get(q["id"], [])
-        questions_with_waveform.append(enriched)
-
-    session_data = {
-        "session_id": session_id,
-        "team": team,
-        "team_name": session["team_name"],
-        "variant": ACTIVE_VARIANT,
-        "created_at": datetime.datetime.now().isoformat(),
-        "questions": questions_with_waveform,
-    }
-
+    questions = session_data["questions"]
     filename = f"{team}_{session_id[:8]}_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
     filepath = os.path.join(SESSION_DIR, filename)
     pdf_filename = f"{os.path.splitext(filename)[0]}_report.pdf"
